@@ -41,6 +41,22 @@ Always set `--cdp-url http://localhost:9222` when Edge is already running.
 
 **This is the most important step.** A poorly worded task causes fara to loop uselessly.
 
+### Prompt augmentation (default ON)
+
+Before constructing the task string, augment the user's prompt — **unless** they explicitly say "verbatim", "as-is", or "exactly as typed".
+
+**How to augment:**
+
+1. **Classify the intent** — pick the best-matching category below and apply its template.
+2. **Merge, don't replace** — keep the user's core goal; add the missing structural pieces (UI element names, streaming guidance, memorize instructions, termination condition).
+3. **Announce the augmentation** — tell the user in one sentence what you added before running fara.
+
+| Intent | Signal words | Template to apply |
+|--------|-------------|-------------------|
+| Content extraction | "grab", "get", "read", "capture", "return", "what does it say", "fetch text", "copy" | Content-extraction template (see below) |
+| Interactive query | "ask", "search", "query", "find", "look up" | Grok or Bing template (see below) |
+| Navigation / action | "go to", "click", "fill", "submit", "download" | Apply rules 1–4 below; no special template |
+
 ### Rules for every task prompt:
 
 1. **Name the exact UI element** — use the label visible on screen (e.g., `"Ask anything"` for Grok's input, `"Search"` for a search bar). Fara-7B reads screenshots; it responds to exact text labels.
@@ -51,6 +67,15 @@ Always set `--cdp-url http://localhost:9222` when Edge is already running.
    > "After pressing Enter, you may see '...', 'Thinking about your request', or partial text appearing — this means the response is loading. Do NOT retype the question. Use the `wait` action (5 s) repeatedly until the full response appears."
 
 4. **Specify termination condition explicitly** — Fara will terminate when told; without this it may stop early or loop. End every task with: *"Once the full response is visible, terminate with success."*
+
+### Content-extraction task template:
+```
+Navigate to <URL>. Wait for the page to fully load (use `wait` 2 s if needed).
+Read the <specific element — e.g. "post text", "article body", "comment"> visible on screen.
+Use the `pause_and_memorize_fact` action to record it verbatim — include the author, date, and full text if visible.
+Once the fact is memorized, terminate with success.
+```
+> **Note:** If the page requires login, fara will raise `[AUTH REQUIRED]`. Instruct the user to log in, then fara resumes and re-reads.
 
 ### Grok (x.com/i/grok) task template:
 ```
@@ -83,7 +108,8 @@ React to each output line:
 
 | Output contains | Action |
 |----------------|--------|
-| `[INFO] Task terminated: success` | Report success to the user; show last 10 lines of output |
+| `[INFO] Task terminated: success` + `Memorized facts:` | Extract the facts list from the line and relay the content to the user verbatim. This is the primary return channel for content-extraction tasks. |
+| `[INFO] Task terminated: success` (no facts) | Report success to the user; show last 10 lines of output |
 | `[INFO] Task terminated: failure` | Report failure verbatim; check `./screenshots/screenshot{N-1}.png` for the last visible state |
 | `[INFO] Task completed after 15 rounds` (no `terminated`) | Rounds exhausted — likely looped or hit an auth wall. Check `./screenshots/screenshot14.png` and tell the user what was visible |
 | `[AUTH REQUIRED]` | Tell the user: *"Fara is paused at a login wall. Switch to the Edge window and log in. When done, press Enter in the terminal where fara is running."* Continue monitoring — fara resumes automatically after Enter |
