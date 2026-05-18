@@ -461,7 +461,11 @@ class FaraAgent:
             
             # Check for termination
             if action_args.get("action") == "terminate":
-                self.logger.info(f"Task terminated: {action_args.get('status')}")
+                status = action_args.get('status')
+                if self.facts:
+                    self.logger.info(f"Task terminated: {status}. Memorized facts: {self.facts}")
+                else:
+                    self.logger.info(f"Task terminated: {status}")
                 break
 
             # Model-signalled auth wall: model visually recognised a login screen
