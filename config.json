@@ -1,8 +1,27 @@
 {
-  "model": "microsoft_fara-7b",
-  "base_url": "http://localhost:1234/v1",
-  "api_key": "lm-studio",
-  "max_rounds": 20,
+  "model": "fara",
+  "base_url": "http://localhost:8080/v1",
+  "api_key": "no-key",
+  "llama_cpp_path": "F:/llama.cpp/llama-server.exe",
+  "model_path": "F:/models/microsoft_Fara-7B-Q8_0.gguf",
+  "model_repo": "bartowski/microsoft_Fara-7B-GGUF",
+  "model_filename": "microsoft_Fara-7B-Q8_0.gguf",
+  "mmproj_path": "F:/models/mmproj-microsoft_Fara-7B-f16.gguf",
+  "mmproj_filename": "mmproj-microsoft_Fara-7B-f16.gguf",
+  "llama_cpp_args": {
+    "ngl": 99,
+    "ctx_size": 16384,
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "cdp_url": null,
+  "edge": {
+    "port": 9222,
+    "exe": "",
+    "user_data_dir": "",
+    "profile": ""
+  },
+  "max_rounds": 15,
   "temperature": 0.0,
   "save_screenshots": true,
   "screenshots_folder": "./screenshots",
@@ -11,4 +30,3 @@
   "show_overlay": true,
   "show_click_markers": true
 }
-

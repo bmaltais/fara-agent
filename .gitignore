@@ -9,3 +9,6 @@ screenshots/
 venv/
 
 AGENTS.md
+downloads/
+uv.lock
+.edge-profile/

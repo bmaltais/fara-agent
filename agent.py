@@ -1,4 +1,4 @@
-"""Simplified Fara Agent for LM Studio"""
+"""Fara Agent — powered by llama.cpp llama-server"""
 import asyncio
 import json
 import logging
@@ -50,25 +50,31 @@ class FaraAgent:
             downloads_folder=self.downloads_folder,
             show_overlay=self.show_overlay,
             show_click_markers=self.show_click_markers,
+            cdp_url=config.get("cdp_url"),
             logger=self.logger
         )
         
         self.client = AsyncOpenAI(
-            api_key=config.get("api_key", "lm-studio"),
-            base_url=config.get("base_url", "http://localhost:1234/v1")
+            api_key=config.get("api_key", "no-key"),
+            base_url=config.get("base_url", "http://localhost:8080/v1")
         )
-        
+
         self.history: List[Any] = []
         self.max_rounds = config.get("max_rounds", 15)
         self.save_screenshots = config.get("save_screenshots", True)
         self.screenshots_folder = config.get("screenshots_folder", "./screenshots")
         self.round_count = 0
-        self._is_lm_studio = "1234" in str(config.get("base_url", "")) or "lm-studio" in str(config.get("api_key", ""))
         self.scroll_history: list[dict[str, Any]] = []
     
     async def start(self):
         """Initialize the agent"""
         await self.browser.start()
+        # In CDP mode, sync viewport dimensions from the actual browser window
+        if self.config.get("cdp_url"):
+            vp = await self.browser.get_actual_viewport()
+            self.viewport_width = vp["width"]
+            self.viewport_height = vp["height"]
+            self.logger.info(f"CDP viewport: {self.viewport_width}x{self.viewport_height}")
         await self.browser.goto("https://www.bing.com")
         self.logger.info("Agent started")
     
@@ -91,14 +97,13 @@ class FaraAgent:
         """Call the LLM with retry logic"""
         openai_messages = [message_to_openai_format(msg) for msg in messages]
         create_kwargs = {
-            "model": self.config.get("model", "microsoft_fara-7b"),
+            "model": self.config.get("model", "fara"),
             "messages": openai_messages,
             "temperature": self.config.get("temperature", 0.0),
             "max_tokens": 1024,
+            "top_p": 0.95,
             "stop": ["</tool_call>", "<|im_end|>", "<|endoftext|>"],
         }
-        if self._is_lm_studio:
-            create_kwargs["top_p"] = 0.95
         response = await self.client.chat.completions.create(**create_kwargs)
         
         return response.choices[0].message.content
@@ -182,6 +187,12 @@ class FaraAgent:
                     await self.browser.show_click_marker(scaled[0], scaled[1], "click")
                 return f"I clicked at coordinates ({scaled[0]:.1f}, {scaled[1]:.1f})."
             
+            elif action == "right_click":
+                coord = action_args.get("coordinate", [0, 0])
+                scaled = self._convert_resized_coords_to_viewport(coord)
+                await self.browser.right_click(scaled[0], scaled[1])
+                return f"I right-clicked at coordinates ({scaled[0]:.1f}, {scaled[1]:.1f})."
+
             elif action in ("mouse_move", "hover"):
                 coord = action_args.get("coordinate", [0, 0])
                 scaled = self._convert_resized_coords_to_viewport(coord)
@@ -255,12 +266,44 @@ class FaraAgent:
                     self.facts.append(str(fact))
                 return "I paused to memorize a fact."
             
+            elif action == "get_image_url":
+                coord = action_args.get("coordinate", [0, 0])
+                scaled = self._convert_resized_coords_to_viewport(coord)
+                url = await self.browser.get_image_url_at(scaled[0], scaled[1])
+                if url:
+                    return f"Image URL at ({scaled[0]:.0f}, {scaled[1]:.0f}): {url}"
+                return f"No image found at ({scaled[0]:.0f}, {scaled[1]:.0f})."
+
+            elif action == "save_image":
+                import os, re
+                from urllib.parse import urlparse, parse_qs, unquote
+                url = action_args.get("url", "") or self.browser.get_url()
+                # Smart URL resolution: extract direct image URL from known overlay patterns
+                parsed = urlparse(url)
+                qs = parse_qs(parsed.query)
+                if "mediaurl" in qs:
+                    # Bing Images overlay — mediaurl param holds the real image URL
+                    url = unquote(qs["mediaurl"][0])
+                elif "imgurl" in qs:
+                    # Google Images overlay
+                    url = unquote(qs["imgurl"][0])
+                filename = action_args.get("filename", "")
+                if not filename:
+                    img_parsed = urlparse(url)
+                    filename = img_parsed.path.split("/")[-1] or "image.jpg"
+                    if "." not in filename:
+                        filename += ".jpg"
+                downloads_folder = self.config.get("downloads_folder", "./downloads")
+                dest = os.path.join(downloads_folder, filename)
+                saved = await self.browser.save_image(url, dest)
+                return f"Image saved to {os.path.abspath(saved)}."
+
             elif action == "terminate":
                 status = action_args.get("status", "success")
                 if self.facts:
                     return f"Task completed with status: {status}. Memorized facts: {self.facts}"
                 return f"Task completed with status: {status}"
-            
+
             else:
                 return f"Unknown action: {action}"
         
@@ -268,6 +311,38 @@ class FaraAgent:
             self.logger.error(f"Action execution failed: {e}")
             return f"Action failed: {str(e)}"
     
+    async def _try_auto_save(self, task: str) -> str | None:
+        """Auto-save if current URL is an image overlay or direct image — returns path or None."""
+        import os, re
+        from urllib.parse import urlparse, parse_qs, unquote
+        url = self.browser.get_url()
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        image_url = None
+        if "mediaurl" in qs:
+            image_url = unquote(qs["mediaurl"][0])
+        elif "imgurl" in qs:
+            image_url = unquote(qs["imgurl"][0])
+        else:
+            exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+            if any(parsed.path.lower().endswith(e) for e in exts):
+                image_url = url
+        if not image_url:
+            return None
+        # Derive clean filename from URL path only (strip query params)
+        img_parsed = urlparse(image_url)
+        filename = img_parsed.path.split("/")[-1] or "image.jpg"
+        if "." not in filename:
+            filename += ".jpg"
+        downloads_folder = self.config.get("downloads_folder", "./downloads")
+        dest = os.path.join(downloads_folder, filename)
+        try:
+            saved = await self.browser.save_image(image_url, dest)
+            return os.path.abspath(saved)
+        except Exception as e:
+            self.logger.warning(f"Auto-save failed: {e}")
+            return None
+
     async def run(self, task: str):
         """Run the agent on a task"""
         self.logger.info(f"Running task: {task}")
@@ -281,14 +356,23 @@ class FaraAgent:
         
         # Track action history for context (text only)
         action_history = []
-        
+        recent_actions: list[str] = []  # last N action signatures for loop detection
+
         # Main loop
         for round_num in range(self.max_rounds):
             self.round_count = round_num + 1
             self.logger.info(f"Round {self.round_count}/{self.max_rounds}")
             
             # Build context summary from recent actions
-            context_text = f"Task: {task}\n\nCurrent URL: {self.browser.get_url()}"
+            import os
+            downloads_abs = os.path.abspath(self.config.get("downloads_folder", "./downloads"))
+            context_text = f"Task: {task}\n\nCurrent URL: {self.browser.get_url()}\nDownloads folder: {downloads_abs}"
+            if any(w in task.lower() for w in ("save", "download")):
+                context_text += (
+                    "\n\nReminder: To save an image — search Bing Images, click a thumbnail to open the overlay, "
+                    "then immediately call save_image. Do NOT click 'View image' or open new tabs. Example:\n"
+                    '<tool_call>{"name": "computer_use", "arguments": {"action": "save_image", "filename": "cat.jpg"}}</tool_call>'
+                )
             if action_history:
                 recent_actions = action_history[-3:]  # Last 3 actions
                 context_text += "\n\nRecent actions:\n" + "\n".join(recent_actions)
@@ -336,16 +420,39 @@ class FaraAgent:
                 self.logger.info(f"Task terminated: {action_args.get('status')}")
                 break
             
+            # Loop detection — bail if same action near same coordinates 3 times in a row
+            coord = action_args.get("coordinate")
+            if coord:
+                # Bucket coordinates to 20px grid to catch slight drifts
+                bucketed = [round(c / 20) * 20 for c in coord]
+                action_sig = f"{action_args.get('action')}:{bucketed}"
+            else:
+                action_sig = f"{action_args.get('action')}:{action_args.get('url', '')}"
+            recent_actions.append(action_sig)
+            if len(recent_actions) > 6:
+                recent_actions.pop(0)
+            if len(recent_actions) >= 3 and len(set(recent_actions[-3:])) == 1:
+                self.logger.warning(f"Loop detected: '{action_sig}' repeated 3 times — stopping early")
+                break
+
             # Execute action
             result = await self._execute_action(action_args)
             self.logger.info(f"Action result: {result}")
-            
+
             # Add to action history
             action_summary = f"{round_num+1}. {action_args.get('action')}: {result}"
             action_history.append(action_summary)
             
             # Get new screenshot
             await asyncio.sleep(1.5)  # Wait for page to update
+
+            # Auto-save: if task involves saving and current URL has an extractable image, save it
+            if any(w in task.lower() for w in ("save", "download")):
+                saved = await self._try_auto_save(task)
+                if saved:
+                    self.logger.info(f"Auto-saved image: {saved}")
+                    break
+
             screenshot = await self._get_screenshot()
             
             # Save screenshot if enabled
