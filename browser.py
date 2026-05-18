@@ -48,12 +48,14 @@ class SimpleBrowser:
             await self._start_local()
 
     async def _on_new_page(self, page):
-        """Switch active page when a new tab opens (e.g. 'View image' in a new tab)."""
-        await asyncio.sleep(0.5)  # let it start loading
-        skip = ("data:", "edge://", "chrome://", "chrome-extension://", "about:blank")
-        if not any(page.url.startswith(s) for s in skip):
+        """Switch active page only when a new tab opens to a direct image URL."""
+        await asyncio.sleep(1.0)  # let it finish loading
+        url = page.url
+        image_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
+        url_lower = url.lower().split("?")[0]  # strip query string for extension check
+        if any(url_lower.endswith(ext) for ext in image_exts):
             self.page = page
-            self.logger.info(f"Switched to new tab: {page.url}")
+            self.logger.info(f"Switched to image tab: {url}")
 
     async def _start_cdp(self):
         """Attach to a running Chrome/Edge via CDP and use a real page tab."""
@@ -355,6 +357,11 @@ class SimpleBrowser:
         await self.page.mouse.click(x, y)
         await asyncio.sleep(0.3)
     
+    async def right_click(self, x: float, y: float):
+        """Right-click at coordinates"""
+        await self.page.mouse.click(x, y, button="right")
+        await asyncio.sleep(0.3)
+
     async def hover(self, x: float, y: float):
         """Move cursor without clicking"""
         await self.page.mouse.move(x, y)
