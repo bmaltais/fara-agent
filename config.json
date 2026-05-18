@@ -21,7 +21,7 @@
     "user_data_dir": "",
     "profile": ""
   },
-  "max_rounds": 20,
+  "max_rounds": 15,
   "temperature": 0.0,
   "save_screenshots": true,
   "screenshots_folder": "./screenshots",

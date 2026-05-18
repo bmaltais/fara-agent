@@ -94,11 +94,13 @@ Available actions:
 - `type`: Type text; optionally provide `coordinate` to focus first.
 - `mouse_move`: Move cursor to (x, y) without clicking.
 - `left_click`: Click the left mouse button at (x, y).
+- `right_click`: Click the right mouse button at (x, y) to open a context menu.
 - `scroll`: Scroll wheel (positive=up, negative=down).
 - `visit_url`: Navigate to a URL (prepend https:// if missing; use search if input looks like a query).
 - `web_search`: Search the web with a query.
 - `history_back`: Go back in browser history.
 - `pause_and_memorize_fact`: Record a fact for later use.
+- `save_image`: Download an image to the downloads folder. Optionally provide `filename`. **To save an image from Bing Images: (1) search for the image, (2) click a thumbnail to open the image overlay, (3) call save_image — it will automatically extract the image URL from the page. Do NOT click "View image", do NOT right-click, do NOT open new tabs.**
 - `wait`: Wait for specified seconds.
 - `terminate`: Finish the task with status "success" or "failure". Use this once the goal is met.
 
