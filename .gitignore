@@ -8,7 +8,6 @@ screenshots/
 .venv/
 venv/
 
-AGENTS.md
 downloads/
 uv.lock
 .edge-profile/
