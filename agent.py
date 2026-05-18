@@ -14,6 +14,16 @@ from prompts import get_computer_use_system_prompt
 from utils import get_trimmed_url
 
 
+AUTH_URL_PATTERNS = [
+    "x.com/i/flow/login",
+    "x.com/i/flow/signup",
+    "accounts.google.com",
+    "login.microsoftonline.com",
+    "appleid.apple.com/sign-in",
+    "facebook.com/login",
+]
+
+
 class FaraAgent:
     """Simplified Fara agent optimized for LM Studio"""
     
@@ -357,6 +367,7 @@ class FaraAgent:
         # Track action history for context (text only)
         action_history = []
         recent_actions: list[str] = []  # last N action signatures for loop detection
+        url_visit_counts: dict[str, int] = {}  # base URL → consecutive visit count
 
         # Main loop
         for round_num in range(self.max_rounds):
@@ -439,10 +450,24 @@ class FaraAgent:
             result = await self._execute_action(action_args)
             self.logger.info(f"Action result: {result}")
 
+            # Auth-wall detection: known login URLs or stuck on same base URL 3+ rounds
+            current_url = self.browser.get_url()
+            auth_hit = any(p in current_url for p in AUTH_URL_PATTERNS)
+            base_url = current_url.split("?")[0]
+            url_visit_counts[base_url] = url_visit_counts.get(base_url, 0) + 1
+            if auth_hit or url_visit_counts[base_url] >= 3:
+                self.logger.info(f"Auth wall detected at {current_url} — waiting for user login")
+                print(f"\n[AUTH REQUIRED] The agent is blocked at: {current_url}")
+                print("Please complete the login in the browser, then press Enter to continue...")
+                await asyncio.get_event_loop().run_in_executor(None, input)
+                url_visit_counts.clear()
+                screenshot = await self._get_screenshot()
+                continue
+
             # Add to action history
             action_summary = f"{round_num+1}. {action_args.get('action')}: {result}"
             action_history.append(action_summary)
-            
+
             # Get new screenshot
             await asyncio.sleep(1.5)  # Wait for page to update
 
