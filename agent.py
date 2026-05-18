@@ -14,6 +14,16 @@ from prompts import get_computer_use_system_prompt
 from utils import get_trimmed_url
 
 
+AUTH_URL_PATTERNS = [
+    "x.com/i/flow/",
+    "x.com/i/jf/",
+    "accounts.google.com",
+    "login.microsoftonline.com",
+    "appleid.apple.com/sign-in",
+    "facebook.com/login",
+]
+
+
 class FaraAgent:
     """Simplified Fara agent optimized for LM Studio"""
     
@@ -82,7 +92,18 @@ class FaraAgent:
         """Close the agent"""
         await self.browser.close()
         self.logger.info("Agent closed")
-    
+
+    @property
+    def _browser_is_interactive(self) -> bool:
+        """Return True when the user can actually see and interact with the browser.
+
+        In plain headless mode there is no visible window, so asking the user to
+        'complete the login' is pointless — the browser is invisible.  A CDP-attached
+        browser (``--cdp-url`` / ``--start-edge``) is always considered interactive
+        because it is a real, pre-existing browser window the user controls.
+        """
+        return not self.headless or bool(self.config.get("cdp_url"))
+
     async def _get_screenshot(self) -> Image.Image:
         """Capture and return screenshot as PIL Image"""
         screenshot_bytes = await self.browser.screenshot()
@@ -362,7 +383,30 @@ class FaraAgent:
         for round_num in range(self.max_rounds):
             self.round_count = round_num + 1
             self.logger.info(f"Round {self.round_count}/{self.max_rounds}")
-            
+
+            # URL-pattern auth-wall detection: fires on known login/onboarding URLs before
+            # wasting a model call. The model can also trigger this via request_human_login.
+            current_url = self.browser.get_url()
+            if any(p in current_url for p in AUTH_URL_PATTERNS):
+                self.logger.info(f"Auth wall detected at {current_url}")
+                if not self._browser_is_interactive:
+                    self.logger.warning(
+                        "Auth wall detected in headless mode — cannot prompt for login. "
+                        "Rerun with --headful or --cdp-url to allow manual login."
+                    )
+                    print(
+                        f"\n[AUTH REQUIRED] The agent is blocked at: {current_url}\n"
+                        "The browser is running headless so login cannot be completed.\n"
+                        "Rerun with --headful or --cdp-url to attach to a visible browser."
+                    )
+                    break
+                else:
+                    print(f"\n[AUTH REQUIRED] The agent is blocked at: {current_url}")
+                    print("Please complete the login in the browser, then press Enter to continue...")
+                    await asyncio.get_event_loop().run_in_executor(None, input)
+                    screenshot = await self._get_screenshot()
+                    prompt_data = get_computer_use_system_prompt(screenshot, self.MLM_PROCESSOR_IM_CFG)
+
             # Build context summary from recent actions
             import os
             downloads_abs = os.path.abspath(self.config.get("downloads_folder", "./downloads"))
@@ -419,6 +463,29 @@ class FaraAgent:
             if action_args.get("action") == "terminate":
                 self.logger.info(f"Task terminated: {action_args.get('status')}")
                 break
+
+            # Model-signalled auth wall: model visually recognised a login screen
+            if action_args.get("action") == "request_human_login":
+                current_url = self.browser.get_url()
+                self.logger.info(f"Model requested human login at {current_url}")
+                if not self._browser_is_interactive:
+                    self.logger.warning(
+                        "Model requested login in headless mode — cannot prompt for login. "
+                        "Rerun with --headful or --cdp-url to allow manual login."
+                    )
+                    print(
+                        f"\n[AUTH REQUIRED] The agent needs you to log in at: {current_url}\n"
+                        "The browser is running headless so login cannot be completed.\n"
+                        "Rerun with --headful or --cdp-url to attach to a visible browser."
+                    )
+                    break
+                else:
+                    print(f"\n[AUTH REQUIRED] The agent needs you to log in at: {current_url}")
+                    print("Please complete the login in the browser, then press Enter to continue...")
+                    await asyncio.get_event_loop().run_in_executor(None, input)
+                    screenshot = await self._get_screenshot()
+                    prompt_data = get_computer_use_system_prompt(screenshot, self.MLM_PROCESSOR_IM_CFG)
+                    continue
             
             # Loop detection — bail if same action near same coordinates 3 times in a row
             coord = action_args.get("coordinate")
@@ -442,7 +509,7 @@ class FaraAgent:
             # Add to action history
             action_summary = f"{round_num+1}. {action_args.get('action')}: {result}"
             action_history.append(action_summary)
-            
+
             # Get new screenshot
             await asyncio.sleep(1.5)  # Wait for page to update
 
