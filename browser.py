@@ -1,5 +1,6 @@
 """Simplified browser controller for Fara agent"""
 import asyncio
+import base64
 import logging
 from typing import Optional
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -16,6 +17,7 @@ class SimpleBrowser:
         downloads_folder: str | None = None,
         show_overlay: bool = False,
         show_click_markers: bool = False,
+        cdp_url: str | None = None,
         logger: Optional[logging.Logger] = None
     ):
         self.headless = headless
@@ -25,10 +27,12 @@ class SimpleBrowser:
         self.downloads_folder = downloads_folder
         self.show_overlay = show_overlay
         self.show_click_markers = show_click_markers
+        self.cdp_url = cdp_url
         self._overlay_created = False
         self._marker_created = False
         self._last_overlay_text: str | None = None
-        
+        self._owns_browser = True  # False when attached via CDP
+
         self.playwright = None
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
@@ -36,9 +40,37 @@ class SimpleBrowser:
         self.last_download_path: str | None = None
     
     async def start(self):
-        """Start the browser"""
+        """Start or attach to a browser."""
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.firefox.launch(headless=self.headless)
+        if self.cdp_url:
+            await self._start_cdp()
+        else:
+            await self._start_local()
+
+    async def _start_cdp(self):
+        """Attach to a running Chrome/Edge via CDP and use an existing tab."""
+        self.logger.info(f"Connecting to browser via CDP at {self.cdp_url}")
+        self.browser = await self.playwright.chromium.connect_over_cdp(self.cdp_url)
+        self._owns_browser = False
+        # Use the existing default context — creating a new context via CDP opens
+        # a separate window and new_page() on it is unreliable across browser versions.
+        self.context = self.browser.contexts[0]
+        if self.context.pages:
+            self.page = self.context.pages[0]
+        else:
+            self.page = await self.context.new_page()
+        # Don't force viewport in CDP mode — let the browser use its actual window size.
+        # Coordinate scaling in _convert_resized_coords_to_viewport handles any resolution.
+        await self.page.bring_to_front()
+        if self.show_overlay:
+            await self._inject_overlay()
+        if self.show_click_markers:
+            await self._inject_click_marker()
+        self.logger.info(f"Attached to running browser via CDP (tab: {self.page.url})")
+
+    async def _start_local(self):
+        """Launch a managed Firefox instance."""
+        self.browser = await self.playwright.chromium.launch(headless=self.headless)
         self.context = await self.browser.new_context(
             viewport={"width": self.viewport_width, "height": self.viewport_height}
         )
@@ -130,13 +162,17 @@ class SimpleBrowser:
         self.logger.info("Browser started")
     
     async def close(self):
-        """Close the browser"""
-        if self.page:
-            await self.page.close()
-        if self.context:
-            await self.context.close()
-        if self.browser:
-            await self.browser.close()
+        """Close the browser (or just the agent tab when attached via CDP)."""
+        if self._owns_browser:
+            if self.page:
+                await self.page.close()
+            if self.context:
+                await self.context.close()
+            if self.browser:
+                await self.browser.close()
+        else:
+            # CDP mode: leave the browser and its tabs untouched
+            pass
         if self.playwright:
             await self.playwright.stop()
         self.logger.info("Browser closed")
@@ -178,7 +214,10 @@ class SimpleBrowser:
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to hide click marker before screenshot: {e}")
-        shot = await self.page.screenshot()
+        if self.cdp_url:
+            shot = await self._cdp_screenshot()
+        else:
+            shot = await self.page.screenshot(timeout=60000)
         if self.show_overlay and self._overlay_created and overlay_was_visible:
             try:
                 await self.page.evaluate(
@@ -200,6 +239,19 @@ class SimpleBrowser:
             except Exception as e:
                 self.logger.warning(f"Failed to restore click marker after screenshot: {e}")
         return shot
+
+    async def get_actual_viewport(self) -> dict:
+        """Return the browser's actual inner window dimensions."""
+        return await self.page.evaluate("() => ({width: window.innerWidth, height: window.innerHeight})")
+
+    async def _cdp_screenshot(self) -> bytes:
+        """Take a screenshot via raw CDP — avoids Playwright's font/paint wait that hangs on real browsers."""
+        session = await self.context.new_cdp_session(self.page)
+        try:
+            result = await session.send("Page.captureScreenshot", {"format": "jpeg", "quality": 85})
+            return base64.b64decode(result["data"])
+        finally:
+            await session.detach()
 
     async def get_scroll_position(self) -> dict:
         """Return scroll position info for the current page."""

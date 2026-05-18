@@ -9,3 +9,5 @@ screenshots/
 venv/
 
 AGENTS.md
+downloads/
+uv.lock

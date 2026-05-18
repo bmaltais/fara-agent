@@ -1,4 +1,4 @@
-"""Simplified Fara Agent for LM Studio"""
+"""Fara Agent — powered by llama.cpp llama-server"""
 import asyncio
 import json
 import logging
@@ -50,25 +50,31 @@ class FaraAgent:
             downloads_folder=self.downloads_folder,
             show_overlay=self.show_overlay,
             show_click_markers=self.show_click_markers,
+            cdp_url=config.get("cdp_url"),
             logger=self.logger
         )
         
         self.client = AsyncOpenAI(
-            api_key=config.get("api_key", "lm-studio"),
-            base_url=config.get("base_url", "http://localhost:1234/v1")
+            api_key=config.get("api_key", "no-key"),
+            base_url=config.get("base_url", "http://localhost:8080/v1")
         )
-        
+
         self.history: List[Any] = []
         self.max_rounds = config.get("max_rounds", 15)
         self.save_screenshots = config.get("save_screenshots", True)
         self.screenshots_folder = config.get("screenshots_folder", "./screenshots")
         self.round_count = 0
-        self._is_lm_studio = "1234" in str(config.get("base_url", "")) or "lm-studio" in str(config.get("api_key", ""))
         self.scroll_history: list[dict[str, Any]] = []
     
     async def start(self):
         """Initialize the agent"""
         await self.browser.start()
+        # In CDP mode, sync viewport dimensions from the actual browser window
+        if self.config.get("cdp_url"):
+            vp = await self.browser.get_actual_viewport()
+            self.viewport_width = vp["width"]
+            self.viewport_height = vp["height"]
+            self.logger.info(f"CDP viewport: {self.viewport_width}x{self.viewport_height}")
         await self.browser.goto("https://www.bing.com")
         self.logger.info("Agent started")
     
@@ -91,14 +97,13 @@ class FaraAgent:
         """Call the LLM with retry logic"""
         openai_messages = [message_to_openai_format(msg) for msg in messages]
         create_kwargs = {
-            "model": self.config.get("model", "microsoft_fara-7b"),
+            "model": self.config.get("model", "fara"),
             "messages": openai_messages,
             "temperature": self.config.get("temperature", 0.0),
             "max_tokens": 1024,
+            "top_p": 0.95,
             "stop": ["</tool_call>", "<|im_end|>", "<|endoftext|>"],
         }
-        if self._is_lm_studio:
-            create_kwargs["top_p"] = 0.95
         response = await self.client.chat.completions.create(**create_kwargs)
         
         return response.choices[0].message.content

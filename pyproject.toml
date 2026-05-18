@@ -1,0 +1,18 @@
+[project]
+name = "fara-agent"
+version = "0.1.0"
+description = "Fara browser automation agent powered by llama.cpp"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright==1.51",
+    "openai>=1.0",
+    "pillow>=10.0",
+    "tenacity>=8.0",
+    "huggingface-hub>=0.23",
+]
+
+[project.scripts]
+fara = "run_agent:main"
+
+[dependency-groups]
+dev = []
