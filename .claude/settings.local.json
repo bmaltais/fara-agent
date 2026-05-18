@@ -4,7 +4,8 @@
       "Bash(rm -f downloads/*)",
       "Bash(uv run *)",
       "PowerShell(uv run *)",
-      "PowerShell(New-Item *)"
+      "PowerShell(New-Item *)",
+      "Skill(fara)"
     ]
   }
 }

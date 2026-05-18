@@ -66,25 +66,31 @@ Before constructing the task string, augment the user's prompt — **unless** th
 3. **Teach streaming-state recognition** — For any page that shows incremental output (Grok, ChatGPT, Perplexity, streaming search results), add this sentence verbatim to the task:
    > "After pressing Enter, you may see '...', 'Thinking about your request', or partial text appearing — this means the response is loading. Do NOT retype the question. Use the `wait` action (5 s) repeatedly until the full response appears."
 
-4. **Specify termination condition explicitly** — Fara will terminate when told; without this it may stop early or loop. End every task with: *"Once the full response is visible, terminate with success."*
+4. **Specify termination condition and success criteria explicitly** — Fara will terminate when told; without this it may stop early or loop. End every task with a verifiable condition: *"Once [specific observable state] is visible, terminate with success."* Vague endings ("when done") cause loops.
+
+5. **Include entity specifics** — Fara's training used heavily varied exemplars with exact arguments. Always include concrete details: specific dates, prices, quantities, filter values, brand names, or locations. Replace "a flight" with "a one-way economy flight from Seattle to JFK on 2026-05-25 under $400".
+
+6. **Halt at Critical Points** — Fara is trained to stop before: **Checkout, Book, Purchase, Call, Email, Order**, or any step requiring personal/sensitive info (name, address, payment, credentials). If the user's task approaches one of these, add explicitly: *"Stop before [critical action] and summarize what you found. Do not proceed without user confirmation."*
+
+7. **Prefer single-site tasks** — Fara performs best within one site. If the goal spans multiple sites, decompose it into sequential single-site sub-tasks and run fara once per site.
 
 ### Content-extraction task template:
 ```
 Navigate to <URL>. Wait for the page to fully load (use `wait` 2 s if needed).
 Read the <specific element — e.g. "post text", "article body", "comment"> visible on screen.
 Use the `pause_and_memorize_fact` action to record it verbatim — include the author, date, and full text if visible.
-Once the fact is memorized, terminate with success.
+Success criterion: the fact has been memorized and contains <expected content — e.g. "a non-empty post body">. Once confirmed, terminate with success.
 ```
 > **Note:** If the page requires login, fara will raise `[AUTH REQUIRED]`. Instruct the user to log in, then fara resumes and re-reads.
 
 ### Grok (x.com/i/grok) task template:
 ```
-Navigate to https://x.com/i/grok. The 'Ask anything' input is auto-focused on page load — do NOT click anything. Use the `type` action with NO coordinate to type: '<question>' with press_enter set to true. After pressing Enter you may see '...', 'Thinking about your request', or partial text streaming — this means Grok is generating a response. Do NOT retype the question. Use the `wait` action (5 s intervals) until the full response is visible. Once complete, terminate with success.
+Navigate to https://x.com/i/grok. The 'Ask anything' input is auto-focused on page load — do NOT click anything. Use the `type` action with NO coordinate to type: '<question>' with press_enter set to true. After pressing Enter you may see '...', 'Thinking about your request', or partial text streaming — this means Grok is generating a response. Do NOT retype the question. Use the `wait` action (5 s intervals) until the full response is visible. Success criterion: a complete, non-truncated response is displayed. Once confirmed, terminate with success.
 ```
 
 ### Bing (bing.com) task template:
 ```
-Navigate to https://www.bing.com. Click the search box, then type: '<query>' and press Enter. Wait for the results page to load fully (use `wait` 3 s if needed). Once results are visible, terminate with success.
+Navigate to https://www.bing.com. Click the search box, then type: '<query>' and press Enter. Wait for the results page to load fully (use `wait` 3 s if needed). Success criterion: at least 3 organic results are visible on the page. Once confirmed, terminate with success.
 ```
 
 ---
