@@ -102,6 +102,7 @@ Available actions:
 - `pause_and_memorize_fact`: Record a fact for later use.
 - `save_image`: Download an image to the downloads folder. Optionally provide `filename`. **To save an image from Bing Images: (1) search for the image, (2) click a thumbnail to open the image overlay, (3) call save_image — it will automatically extract the image URL from the page. Do NOT click "View image", do NOT right-click, do NOT open new tabs.**
 - `wait`: Wait for specified seconds.
+- `request_human_login`: Call this when you encounter a login wall, sign-in form, phone/email entry for authentication, or any screen requiring account credentials. Do NOT attempt to fill in usernames, passwords, or phone numbers — always call this action instead and wait for the human to log in.
 - `terminate`: Finish the task with status "success" or "failure". Use this once the goal is met.
 
 Call the tool with:

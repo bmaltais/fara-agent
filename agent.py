@@ -15,8 +15,8 @@ from utils import get_trimmed_url
 
 
 AUTH_URL_PATTERNS = [
-    "x.com/i/flow/login",
-    "x.com/i/flow/signup",
+    "x.com/i/flow/",
+    "x.com/i/jf/",
     "accounts.google.com",
     "login.microsoftonline.com",
     "appleid.apple.com/sign-in",
@@ -367,13 +367,23 @@ class FaraAgent:
         # Track action history for context (text only)
         action_history = []
         recent_actions: list[str] = []  # last N action signatures for loop detection
-        url_visit_counts: dict[str, int] = {}  # base URL → consecutive visit count
 
         # Main loop
         for round_num in range(self.max_rounds):
             self.round_count = round_num + 1
             self.logger.info(f"Round {self.round_count}/{self.max_rounds}")
-            
+
+            # URL-pattern auth-wall detection: fires on known login/onboarding URLs before
+            # wasting a model call. The model can also trigger this via request_human_login.
+            current_url = self.browser.get_url()
+            if any(p in current_url for p in AUTH_URL_PATTERNS):
+                self.logger.info(f"Auth wall detected at {current_url} — waiting for user login")
+                print(f"\n[AUTH REQUIRED] The agent is blocked at: {current_url}")
+                print("Please complete the login in the browser, then press Enter to continue...")
+                await asyncio.get_event_loop().run_in_executor(None, input)
+                screenshot = await self._get_screenshot()
+                prompt_data = get_computer_use_system_prompt(screenshot, self.MLM_PROCESSOR_IM_CFG)
+
             # Build context summary from recent actions
             import os
             downloads_abs = os.path.abspath(self.config.get("downloads_folder", "./downloads"))
@@ -430,6 +440,19 @@ class FaraAgent:
             if action_args.get("action") == "terminate":
                 self.logger.info(f"Task terminated: {action_args.get('status')}")
                 break
+
+            # Model-signalled auth wall: model visually recognised a login screen
+            if action_args.get("action") == "request_human_login":
+                current_url = self.browser.get_url()
+                self.logger.info(f"Model requested human login at {current_url}")
+                print(f"\n[AUTH REQUIRED] The agent needs you to log in at: {current_url}")
+                print("Please complete the login in the browser, then press Enter to continue...")
+                await asyncio.get_event_loop().run_in_executor(None, input)
+                consecutive_same_url = 0
+                last_round_url = ""
+                screenshot = await self._get_screenshot()
+                prompt_data = get_computer_use_system_prompt(screenshot, self.MLM_PROCESSOR_IM_CFG)
+                continue
             
             # Loop detection — bail if same action near same coordinates 3 times in a row
             coord = action_args.get("coordinate")
@@ -449,20 +472,6 @@ class FaraAgent:
             # Execute action
             result = await self._execute_action(action_args)
             self.logger.info(f"Action result: {result}")
-
-            # Auth-wall detection: known login URLs or stuck on same base URL 3+ rounds
-            current_url = self.browser.get_url()
-            auth_hit = any(p in current_url for p in AUTH_URL_PATTERNS)
-            base_url = current_url.split("?")[0]
-            url_visit_counts[base_url] = url_visit_counts.get(base_url, 0) + 1
-            if auth_hit or url_visit_counts[base_url] >= 3:
-                self.logger.info(f"Auth wall detected at {current_url} — waiting for user login")
-                print(f"\n[AUTH REQUIRED] The agent is blocked at: {current_url}")
-                print("Please complete the login in the browser, then press Enter to continue...")
-                await asyncio.get_event_loop().run_in_executor(None, input)
-                url_visit_counts.clear()
-                screenshot = await self._get_screenshot()
-                continue
 
             # Add to action history
             action_summary = f"{round_num+1}. {action_args.get('action')}: {result}"
