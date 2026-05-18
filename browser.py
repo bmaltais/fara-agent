@@ -47,20 +47,36 @@ class SimpleBrowser:
         else:
             await self._start_local()
 
+    async def _on_new_page(self, page):
+        """Switch active page when a new tab opens (e.g. 'View image' in a new tab)."""
+        await asyncio.sleep(0.5)  # let it start loading
+        skip = ("data:", "edge://", "chrome://", "chrome-extension://", "about:blank")
+        if not any(page.url.startswith(s) for s in skip):
+            self.page = page
+            self.logger.info(f"Switched to new tab: {page.url}")
+
     async def _start_cdp(self):
-        """Attach to a running Chrome/Edge via CDP and use an existing tab."""
+        """Attach to a running Chrome/Edge via CDP and use a real page tab."""
         self.logger.info(f"Connecting to browser via CDP at {self.cdp_url}")
         self.browser = await self.playwright.chromium.connect_over_cdp(self.cdp_url)
         self._owns_browser = False
-        # Use the existing default context — creating a new context via CDP opens
-        # a separate window and new_page() on it is unreliable across browser versions.
         self.context = self.browser.contexts[0]
-        if self.context.pages:
-            self.page = self.context.pages[0]
+        self.context.on("page", self._on_new_page)
+
+        # Skip internal browser pages — only use real user-facing tabs
+        skip_prefixes = ("data:", "edge://", "chrome://", "chrome-extension://", "about:")
+        usable = [p for p in self.context.pages
+                  if not any(p.url.startswith(s) for s in skip_prefixes)]
+
+        if usable:
+            self.page = usable[0]
+            self.logger.info(f"Using existing tab: {self.page.url}")
         else:
-            self.page = await self.context.new_page()
+            # No real tabs yet — use whatever is available (agent.start() will navigate it)
+            self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+            self.logger.info(f"No usable tab found, using: {self.page.url}")
+
         # Don't force viewport in CDP mode — let the browser use its actual window size.
-        # Coordinate scaling in _convert_resized_coords_to_viewport handles any resolution.
         await self.page.bring_to_front()
         if self.show_overlay:
             await self._inject_overlay()
@@ -239,6 +255,64 @@ class SimpleBrowser:
             except Exception as e:
                 self.logger.warning(f"Failed to restore click marker after screenshot: {e}")
         return shot
+
+    async def get_image_url_at(self, x: float, y: float) -> str | None:
+        """Return the src URL of the image element nearest to (x, y) in viewport coords."""
+        return await self.page.evaluate(
+            """([x, y]) => {
+                function bestSrc(el) {
+                    if (!el) return null;
+                    if (el.tagName === 'IMG') {
+                        return el.src || el.getAttribute('data-src') || el.getAttribute('data-lazy-src')
+                            || (el.srcset && el.srcset.split(',')[0].trim().split(' ')[0]) || null;
+                    }
+                    // background-image CSS
+                    const bg = window.getComputedStyle(el).backgroundImage;
+                    if (bg && bg !== 'none') {
+                        const m = bg.match(/url\\(["']?([^"')]+)["']?\\)/);
+                        if (m) return m[1];
+                    }
+                    return null;
+                }
+                // Check element and ancestors
+                const el = document.elementFromPoint(x, y);
+                if (!el) return null;
+                let cur = el;
+                for (let i = 0; i < 8; i++) {
+                    const s = bestSrc(cur);
+                    if (s && s.startsWith('http')) return s;
+                    if (!cur.parentElement) break;
+                    cur = cur.parentElement;
+                }
+                // Search inside element for any img
+                const imgs = el.querySelectorAll ? el.querySelectorAll('img') : [];
+                for (const img of imgs) {
+                    const s = bestSrc(img);
+                    if (s && s.startsWith('http')) return s;
+                }
+                return null;
+            }""",
+            [x, y],
+        )
+
+    async def save_image(self, url: str, dest_path: str) -> str:
+        """Download an image URL server-side (bypasses CORS) and save to dest_path."""
+        import os
+        import urllib.request
+        os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+        # Pass browser cookies and a realistic User-Agent to avoid 403s
+        cookies = await self.page.evaluate("() => document.cookie")
+        headers = {
+            "User-Agent": await self.page.evaluate("() => navigator.userAgent"),
+            "Referer": self.page.url,
+            "Cookie": cookies or "",
+        }
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+        with open(dest_path, "wb") as f:
+            f.write(data)
+        return dest_path
 
     async def get_actual_viewport(self) -> dict:
         """Return the browser's actual inner window dimensions."""

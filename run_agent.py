@@ -42,8 +42,24 @@ def ensure_model(config: dict) -> None:
         _download_if_missing(repo, config["mmproj_filename"], Path(config["mmproj_path"]))
 
 
+def _cdp_is_ready(port: int) -> bool:
+    """Return True if a CDP endpoint is already listening on the given port."""
+    try:
+        with urllib.request.urlopen(f"http://localhost:{port}/json/version", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def start_edge(config: dict) -> None:
-    """Launch Edge with CDP by delegating to start_edge.ps1."""
+    """Launch Edge with CDP (skipped if CDP is already available)."""
+    edge_cfg = config.get("edge", {})
+    port = edge_cfg.get("port", 9222)
+
+    if _cdp_is_ready(port):
+        logger.info(f"CDP already available on port {port} — skipping Edge launch")
+        return
+
     script = Path(__file__).parent / "start_edge.ps1"
     edge_cfg = config.get("edge", {})
     port = edge_cfg.get("port", 9222)
@@ -51,7 +67,7 @@ def start_edge(config: dict) -> None:
     user_data_dir = edge_cfg.get("user_data_dir", r"C:\Users\berna\AppData\Local\Microsoft\Edge\User Data")
     exe = edge_cfg.get("exe", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 
-    cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Port", str(port)]
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Port", str(port)]
     if profile:
         cmd += ["-Profile", profile]
     if user_data_dir:

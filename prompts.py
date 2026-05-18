@@ -99,6 +99,7 @@ Available actions:
 - `web_search`: Search the web with a query.
 - `history_back`: Go back in browser history.
 - `pause_and_memorize_fact`: Record a fact for later use.
+- `save_image`: Download an image to the downloads folder. Optionally provide `filename`. **To save an image from Bing Images: (1) search for the image, (2) click a thumbnail to open the image overlay, (3) call save_image — it will automatically extract the image URL from the page. Do NOT click "View image", do NOT right-click, do NOT open new tabs.**
 - `wait`: Wait for specified seconds.
 - `terminate`: Finish the task with status "success" or "failure". Use this once the goal is met.
 

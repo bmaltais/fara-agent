@@ -260,12 +260,43 @@ class FaraAgent:
                     self.facts.append(str(fact))
                 return "I paused to memorize a fact."
             
+            elif action == "get_image_url":
+                coord = action_args.get("coordinate", [0, 0])
+                scaled = self._convert_resized_coords_to_viewport(coord)
+                url = await self.browser.get_image_url_at(scaled[0], scaled[1])
+                if url:
+                    return f"Image URL at ({scaled[0]:.0f}, {scaled[1]:.0f}): {url}"
+                return f"No image found at ({scaled[0]:.0f}, {scaled[1]:.0f})."
+
+            elif action == "save_image":
+                import os, re
+                from urllib.parse import urlparse, parse_qs, unquote
+                url = action_args.get("url", "") or self.browser.get_url()
+                # Smart URL resolution: extract direct image URL from known overlay patterns
+                parsed = urlparse(url)
+                qs = parse_qs(parsed.query)
+                if "mediaurl" in qs:
+                    # Bing Images overlay — mediaurl param holds the real image URL
+                    url = unquote(qs["mediaurl"][0])
+                elif "imgurl" in qs:
+                    # Google Images overlay
+                    url = unquote(qs["imgurl"][0])
+                filename = action_args.get("filename", "")
+                if not filename:
+                    filename = re.sub(r'[?#].*$', '', url.split("/")[-1]) or "image.jpg"
+                    if "." not in filename:
+                        filename += ".jpg"
+                downloads_folder = self.config.get("downloads_folder", "./downloads")
+                dest = os.path.join(downloads_folder, filename)
+                saved = await self.browser.save_image(url, dest)
+                return f"Image saved to {os.path.abspath(saved)}."
+
             elif action == "terminate":
                 status = action_args.get("status", "success")
                 if self.facts:
                     return f"Task completed with status: {status}. Memorized facts: {self.facts}"
                 return f"Task completed with status: {status}"
-            
+
             else:
                 return f"Unknown action: {action}"
         
@@ -286,14 +317,23 @@ class FaraAgent:
         
         # Track action history for context (text only)
         action_history = []
-        
+        recent_actions: list[str] = []  # last N action signatures for loop detection
+
         # Main loop
         for round_num in range(self.max_rounds):
             self.round_count = round_num + 1
             self.logger.info(f"Round {self.round_count}/{self.max_rounds}")
             
             # Build context summary from recent actions
-            context_text = f"Task: {task}\n\nCurrent URL: {self.browser.get_url()}"
+            import os
+            downloads_abs = os.path.abspath(self.config.get("downloads_folder", "./downloads"))
+            context_text = f"Task: {task}\n\nCurrent URL: {self.browser.get_url()}\nDownloads folder: {downloads_abs}"
+            if any(w in task.lower() for w in ("save", "download")):
+                context_text += (
+                    "\n\nReminder: To save an image — search Bing Images, click a thumbnail to open the overlay, "
+                    "then immediately call save_image. Do NOT click 'View image' or open new tabs. Example:\n"
+                    '<tool_call>{"name": "computer_use", "arguments": {"action": "save_image", "filename": "cat.jpg"}}</tool_call>'
+                )
             if action_history:
                 recent_actions = action_history[-3:]  # Last 3 actions
                 context_text += "\n\nRecent actions:\n" + "\n".join(recent_actions)
@@ -341,10 +381,19 @@ class FaraAgent:
                 self.logger.info(f"Task terminated: {action_args.get('status')}")
                 break
             
+            # Loop detection — bail if same action+args repeated 3 times in a row
+            action_sig = f"{action_args.get('action')}:{action_args.get('coordinate', action_args.get('url', ''))}"
+            recent_actions.append(action_sig)
+            if len(recent_actions) > 6:
+                recent_actions.pop(0)
+            if len(recent_actions) >= 3 and len(set(recent_actions[-3:])) == 1:
+                self.logger.warning(f"Loop detected: '{action_sig}' repeated 3 times — stopping early")
+                break
+
             # Execute action
             result = await self._execute_action(action_args)
             self.logger.info(f"Action result: {result}")
-            
+
             # Add to action history
             action_summary = f"{round_num+1}. {action_args.get('action')}: {result}"
             action_history.append(action_summary)
